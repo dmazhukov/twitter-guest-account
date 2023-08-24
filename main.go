@@ -69,7 +69,9 @@ func main() {
 
 	maxRetries := int(*numAttempts)
 	for i := uint(0); i < *numAccounts; i++ {
-		session := ctor.Session()
+		// This will honor the `HTTP_PROXY`/`HTTPS_PROXY` environment
+		// variables, without explicit configuration.
+		session := ctor.Session(nil)
 		if err = session.PrepareCreate(ctx); err != nil {
 			break
 		}

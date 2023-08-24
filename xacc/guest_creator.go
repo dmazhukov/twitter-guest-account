@@ -15,6 +15,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 )
@@ -50,12 +51,13 @@ type GuestCreator struct {
 	sessionID   uint32
 }
 
-func (ctor *GuestCreator) Session() *GuestCreationSession {
+func (ctor *GuestCreator) Session(proxyURL *url.URL) *GuestCreationSession {
 	id := atomic.AddUint32(&ctor.sessionID, 1)
 
 	return &GuestCreationSession{
-		ctor: ctor,
-		log:  ctor.log.With("id", id),
+		ctor:  ctor,
+		log:   ctor.log.With("id", id),
+		proxy: proxyURL,
 	}
 }
 
@@ -101,6 +103,7 @@ func (ctor *GuestCreator) getBearerToken(ctx context.Context) error {
 	b, err := doHttpPost(
 		ctx,
 		ctor.log,
+		nil,
 		"https://api.twitter.com/oauth2/token",
 		"grant_type=client_credentials",
 		map[string]string{
@@ -129,8 +132,9 @@ func (ctor *GuestCreator) getBearerToken(ctx context.Context) error {
 
 type GuestCreationSession struct {
 	ctor *GuestCreator
+	log  *slog.Logger
 
-	log *slog.Logger
+	proxy *url.URL
 
 	guestToken  string
 	flowHeaders map[string]string
@@ -213,6 +217,7 @@ func (sess *GuestCreationSession) getGuestToken(ctx context.Context) error {
 	b, err := doHttpPost(
 		ctx,
 		sess.log,
+		sess.proxy,
 		"https://api.twitter.com/1.1/guest/activate.json",
 		"",
 		map[string]string{
@@ -280,6 +285,7 @@ func (sess *GuestCreationSession) getFlowToken(ctx context.Context) error {
 	b, err := doHttpPost(
 		ctx,
 		sess.log,
+		sess.proxy,
 		"https://api.twitter.com/1.1/onboarding/task.json?flow_name=welcome&api_version=1&known_device_token=&sim_country_code=us",
 		`{"flow_token":null,"input_flow_data":{"country_code":null,"flow_context":{"start_location":{"location":"splash_screen"}},"requested_variant":null,"target_user_id":0},"subtask_versions":{"generic_urt":3,"standard":1,"open_home_timeline":1,"app_locale_update":1,"enter_date":1,"email_verification":3,"enter_password":5,"enter_text":5,"one_tap":2,"cta":7,"single_sign_on":1,"fetch_persisted_data":1,"enter_username":3,"web_modal":2,"fetch_temporary_password":1,"menu_dialog":1,"sign_up_review":5,"interest_picker":4,"user_recommendations_urt":3,"in_app_notification":1,"sign_up":2,"typeahead_search":1,"user_recommendations_list":4,"cta_inline":1,"contacts_live_sync_permission_prompt":3,"choice_selection":5,"js_instrumentation":1,"alert_dialog_suppress_client_events":1,"privacy_options":1,"topics_selector":1,"wait_spinner":3,"tweet_selection_urt":1,"end_flow":1,"settings_list":7,"open_external_link":1,"phone_verification":5,"security_key":3,"select_banner":2,"upload_media":1,"web":2,"alert_dialog":1,"open_account":2,"action_list":2,"enter_phone":2,"open_link":1,"show_code":1,"update_users":1,"check_logged_in_account":1,"enter_email":2,"select_avatar":4,"location_permission_prompt":2,"notifications_permission_prompt":4}}`,
 		sess.flowHeaders,
@@ -351,6 +357,7 @@ func (sess *GuestCreationSession) getSubtaskOpenAccount(ctx context.Context) (st
 	b, err := doHttpPost(
 		ctx,
 		sess.log,
+		sess.proxy,
 		"https://api.twitter.com/1.1/onboarding/task.json",
 		`{"flow_token":"`+sess.flowToken+`","subtask_inputs":[{"open_link":{"link":"next_link"},"subtask_id":"NextTaskOpenLink"}],"subtask_versions":{"generic_urt":3,"standard":1,"open_home_timeline":1,"app_locale_update":1,"enter_date":1,"email_verification":3,"enter_password":5,"enter_text":5,"one_tap":2,"cta":7,"single_sign_on":1,"fetch_persisted_data":1,"enter_username":3,"web_modal":2,"fetch_temporary_password":1,"menu_dialog":1,"sign_up_review":5,"interest_picker":4,"user_recommendations_urt":3,"in_app_notification":1,"sign_up":2,"typeahead_search":1,"user_recommendations_list":4,"cta_inline":1,"contacts_live_sync_permission_prompt":3,"choice_selection":5,"js_instrumentation":1,"alert_dialog_suppress_client_events":1,"privacy_options":1,"topics_selector":1,"wait_spinner":3,"tweet_selection_urt":1,"end_flow":1,"settings_list":7,"open_external_link":1,"phone_verification":5,"security_key":3,"select_banner":2,"upload_media":1,"web":2,"alert_dialog":1,"open_account":2,"action_list":2,"enter_phone":2,"open_link":1,"show_code":1,"update_users":1,"check_logged_in_account":1,"enter_email":2,"select_avatar":4,"location_permission_prompt":2,"notifications_permission_prompt":4}}`,
 		sess.flowHeaders,
@@ -390,6 +397,7 @@ func (sess *GuestCreationSession) getSubtaskOpenAccount(ctx context.Context) (st
 func doHttpPost(
 	ctx context.Context,
 	log *slog.Logger,
+	proxy *url.URL,
 	uri string,
 	body string,
 	headers map[string]string,
@@ -406,13 +414,19 @@ func doHttpPost(
 
 	log.Debug("HTTP POST - request", "uri", uri)
 
-	// If people want to extend this to support dynaically picking a HTTP
-	// proxy, then instead of using DefaultClient, instantiate a Transport,
-	// with a different `Proxy` function.
-	//
 	// This is not required to get this to honor `HTTP_PROXY`, `HTTPS_PROXY`,
-	// but all the public ones are rate-limited anyway.
-	resp, err := http.DefaultClient.Do(req)
+	// and only exists to support people trying to slash-and-burn farm accounts
+	// using a shitload of proxies.
+	client := http.DefaultClient
+	if proxy != nil {
+		client = &http.Client{
+			Transport: &http.Transport{
+				Proxy: http.ProxyURL(proxy),
+			},
+		}
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dispatch request: %w", err)
 	}
