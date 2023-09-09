@@ -51,13 +51,15 @@ func main() {
 		}
 	}
 
+	fileExists := false
 	if fn := *outputPath; fn != "" {
 		var err error
 		if _, err = os.Stat(fn); !errors.Is(err, os.ErrNotExist) {
-			slog.Error("stat output file (probably exists already)", "err", err)
-			os.Exit(1)
+			fileExists = true
+			// slog.Error("stat output file (probably exists already)", "err", err)
+			// os.Exit(1)
 		}
-		f, err = os.OpenFile(fn, os.O_CREATE|os.O_WRONLY, 0o600)
+		f, err = os.OpenFile(fn, os.O_CREATE|os.O_RDWR, 0644)
 		if err != nil {
 			slog.Error("open output file", "err", err)
 			os.Exit(1)
@@ -65,7 +67,11 @@ func main() {
 		defer f.Close()
 	}
 
-	writeStrToF("[")
+	if !fileExists {
+		writeStrToF("[")
+	} else {
+		f.Seek(-1, 2)
+	}
 
 	maxRetries := int(*numAttempts)
 	for i := uint(0); i < *numAccounts; i++ {
@@ -126,9 +132,10 @@ func main() {
 		fmt.Printf("%s\n", guestAccount)
 
 		s := guestAccount
-		if i > 0 {
+		if i > 0 || fileExists {
 			s = "," + s
 		}
+
 		writeStrToF(s)
 	}
 
