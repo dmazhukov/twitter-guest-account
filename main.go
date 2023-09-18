@@ -12,7 +12,7 @@ import (
 	"os"
 	"time"
 
-	"gitlab.com/yawning/twitter-guest-account/xacc"
+	"github.com/dmazhukov/twitter-guest-account/xacc"
 )
 
 func main() {
